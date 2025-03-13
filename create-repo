@@ -1,0 +1,145 @@
+#!/bin/bash
+
+# 🌟 Проверка зависимости: GitHub CLI
+if ! command -v gh &>/dev/null; then
+  echo "🛠️ GitHub CLI (gh) не найден. Устанавливаем..."
+  if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+    type -p curl >/dev/null || sudo apt install curl -y
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | \
+      sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+    sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | \
+      sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+    sudo apt update
+    sudo apt install gh -y
+  else
+    echo "❌ Автоустановка поддерживается только на Linux (APT). Установите gh вручную: https://cli.github.com/"
+    exit 1
+  fi
+fi
+
+# 📂 Текущая папка
+current_dir=$(basename "$PWD")
+echo "📁 Текущая папка: $current_dir"
+
+# 📌 Имя репозитория
+read -p "🔤 Введите имя репозитория на GitHub (по умолчанию: $current_dir): " repo
+repo=${repo:-$current_dir}
+
+# 🔓 Приватность (по умолчанию: публичный)
+read -p "🔐 Сделать репозиторий приватным? (y/n, по умолчанию: n): " private
+private=${private:-n}
+visibility=$([[ "$private" == [Yy] ]] && echo "private" || echo "public")
+
+# 🚀 Инициализация Git
+if [ ! -d .git ]; then
+  echo "🚀 Инициализируем Git..."
+  git init
+else
+  echo "🔁 Git уже инициализирован."
+fi
+
+# Переключение на ветку main, если её ещё нет
+if ! git show-ref --quiet refs/heads/main; then
+  git checkout -b main
+else
+  git checkout main
+fi
+
+# README.md
+if [ ! -f README.md ]; then
+  echo "# $repo" > README.md
+  echo "📄 README.md создан."
+fi
+
+# .gitignore — автоопределение
+if [ ! -f .gitignore ]; then
+  echo "🤖 Определяем тип проекта..."
+
+  if ls *.tf >/dev/null 2>&1 || [ -f main.tf ]; then
+    template="terraform"
+  elif [ -f package.json ]; then
+    template="node"
+  elif ls *.py >/dev/null 2>&1 || [ -f requirements.txt ] || [ -d .venv ]; then
+    template="python"
+  elif ls *.java >/dev/null 2>&1 || [ -f pom.xml ] || [ -f build.gradle ]; then
+    template="java"
+  else
+    template="none"
+  fi
+
+  echo "📂 Обнаружен тип проекта: $template"
+
+  case $template in
+    python)
+      cat <<EOF > .gitignore
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+.venv
+EOF
+      ;;
+    node)
+      cat <<EOF > .gitignore
+node_modules/
+dist/
+.env
+npm-debug.log
+EOF
+      ;;
+    java)
+      cat <<EOF > .gitignore
+*.class
+*.jar
+*.war
+*.log
+target/
+EOF
+      ;;
+    terraform)
+      cat <<EOF > .gitignore
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+*.backup
+EOF
+      ;;
+    none)
+      touch .gitignore
+      ;;
+  esac
+
+  echo "✅ .gitignore создан."
+fi
+
+# 📦 Добавление и коммит
+echo "📦 Добавляем все файлы..."
+git add .
+
+if git diff --cached --quiet; then
+  echo "⚠️ Нет изменений для коммита. Пропускаем коммит."
+  skip_commit=true
+else
+  echo "📝 Создаём коммит..."
+  git commit -m "Initial commit"
+fi
+
+# 🌐 Проверка, существует ли репозиторий на GitHub
+if gh repo view "$repo" &>/dev/null; then
+  echo "🔁 Репозиторий уже существует на GitHub. Пропускаем создание."
+else
+  echo "🌐 Создаём репозиторий на GitHub..."
+  gh repo create "$repo" --source=. --"$visibility" --push
+fi
+
+# ⬆️ Push, если есть коммиты
+if [ "$skip_commit" != true ]; then
+  echo "⬆️ Отправляем изменения в GitHub..."
+  git push -u origin main
+fi
+
+# ✅ Финальный вывод
+user=$(gh auth status --show-token 2>/dev/null | grep -oP '(?<=as ).*')
+echo "✅ Готово! Репозиторий: https://github.com/${user:-your-username}/$repo"
